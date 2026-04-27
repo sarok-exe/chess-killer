@@ -1,4 +1,4 @@
-// Chess Killer - Updated for all chess.com board states
+// Chess Killer - Fixed for Chess.com board structure
 
 (function() {
     'use strict';
@@ -11,9 +11,8 @@
         
         try {
             stockfish = new Worker('https://cdn.jsdelivr.net/npm/stockfish.js@10.0.0/dist/stockfish.js');
-            console.log('Chess Killer: Stockfish loaded');
         } catch (e) {
-            console.error('Stockfish init failed:', e);
+            console.error('Stockfish error:', e);
             return null;
         }
         
@@ -21,14 +20,15 @@
             const msg = e.data;
             if (msg.includes('bestmove')) {
                 const move = msg.split('bestmove ')[1]?.split(' ')[0];
-                document.getElementById('ck-best-move').textContent = move || 'None';
+                const bestEl = document.getElementById('ck-best-move');
+                if (bestEl) bestEl.textContent = move || 'None';
             }
             if (msg.includes('info depth')) {
                 const evalMatch = msg.match(/score (cp|mate) ([-\d]+)/);
                 if (evalMatch) {
                     const score = parseInt(evalMatch[2]);
                     const evalStr = evalMatch[1] === 'mate' 
-                        ? `Mate: ${score > 0 ? '+' : ''}${Math.abs(score)}` 
+                        ? `Mate: ${score}` 
                         : (score / 100).toFixed(2);
                     document.getElementById('ck-evaluation').textContent = evalStr;
                 }
@@ -38,181 +38,116 @@
         return stockfish;
     }
     
-    // Get board using multiple methods
-    function getBoardFEN() {
+    // Convert square-XX to FEN (21 = a1, 81 = h1)
+    function squareToFEN(squareNum) {
+        const file = (squareNum % 10) - 1;  // 1->0, 2->1, ..., 8->7
+        const rank = Math.floor(squareNum / 10);  // 1->0, 8->8
         const files = 'abcdefgh';
-        const ranks = '87654321';
-        let fen = '';
-        
-        // Try all possible board selectors
-        const boardSelectors = [
-            '.board', 
-            '.chess-board',
-            '[class*="board"]',
-            '#board',
-            '.cg-board',
-            '.game-board'
-        ];
-        
-        let board = null;
-        for (const sel of boardSelectors) {
-            board = document.querySelector(sel);
-            if (board) break;
-        }
-        
-        if (!board) {
-            // Fallback: look for any element with data-square
-            const squares = document.querySelectorAll('[data-square]');
-            if (squares.length === 0) {
-                return null;
-            }
-        }
-        
-        // Build FEN
-        for (let r = 0; r < 8; r++) {
-            let emptyCount = 0;
-            
-            for (let f = 0; f < 8; f++) {
-                const square = files[f] + ranks[r];
-                
-                // Try multiple selectors
-                let piece = document.querySelector(
-                    `[data-square="${square}"] .piece, ` +
-                    `.square-${square} .piece, ` +
-                    `[class*="square"] [data-square="${square}"] .piece`
-                );
-                
-                if (!piece) {
-                    // Try finding by piece position
-                    const allPieces = document.querySelectorAll('.piece');
-                    allPieces.forEach(p => {
-                        const sq = p.closest('[data-square]');
-                        if (sq && sq.dataset.square === square) {
-                            piece = p;
-                        }
-                    });
-                }
-                
-                if (piece && piece.className) {
-                    if (emptyCount > 0) {
-                        fen += emptyCount;
-                        emptyCount = 0;
-                    }
-                    
-                    let type = '';
-                    const cls = piece.className.toString();
-                    
-                    if (cls.includes('pawn')) type = 'p';
-                    else if (cls.includes('knight') || cls.includes('n')) type = 'n';
-                    else if (cls.includes('bishop') || cls.includes('b') && !cls.includes('web')) type = 'b';
-                    else if (cls.includes('rook') || cls.includes('r')) type = 'r';
-                    else if (cls.includes('queen') || cls.includes('q')) type = 'q';
-                    else if (cls.includes('king') || cls.includes('k')) type = 'k';
-                    
-                    if (type && cls.includes('white')) {
-                        type = type.toUpperCase();
-                    }
-                    
-                    if (type) fen += type;
-                } else {
-                    emptyCount++;
-                }
-            }
-            
-            if (emptyCount > 0) fen += emptyCount;
-            if (r < 7) fen += '/';
-        }
-        
-        if (fen === '8/8/8/8/8/8/8/8') {
-            return null; // Empty board
-        }
-        
-        // Side to move
-        let side = 'w';
-        const turnEl = document.querySelector('.game-turn-indicator, .turn-indicator, [class*="turn"]');
-        if (turnEl && turnEl.className.includes('black')) side = 'b';
-        
-        return fen + ' ' + side + ' KQkq - 0 1';
+        return files[file] + rank;
     }
     
-    // Find chessboard differently - look at piece positions
-    function getBoardFEN_alt() {
-        const pieces = document.querySelectorAll('[data-square] .piece');
+    function getBoardFEN() {
+        const pieces = document.querySelectorAll('.piece[class*="square-"]');
+        
         if (pieces.length === 0) {
-            // Try inline styles
-            const styled = document.querySelectorAll('[style*="background-image"]');
-            console.log('Chess Killer: Found styled elements:', styled.length);
             return null;
         }
         
-        const pieceMap = {
-            'p': 'p', 'n': 'n', 'b': 'b', 'r': 'r', 'q': 'q', 'k': 'k'
-        };
+        // Build FEN board array
+        const board = Array(8).fill(null).map(() => Array(8).fill(null));
         
-        const board = {};
-        pieces.forEach(p => {
-            const sq = p.closest('[data-square]');
-            if (!sq) return;
+        pieces.forEach(piece => {
+            const classes = piece.className;
+            if (!classes) return;
             
-            const square = sq.dataset.square;
-            if (!square || square.length !== 2) return;
-            
-            const cls = p.className;
+            // Extract piece type and color
             let type = '';
+            let color = '';
             
-            if (cls.includes('pawn')) type = 'p';
-            else if (cls.includes('knight')) type = 'n';
-            else if (cls.includes('bishop')) type = 'b';
-            else if (cls.includes('rook')) type = 'r';
-            else if (cls.includes('queen')) type = 'q';
-            else if (cls.includes('king')) type = 'k';
+            // Parse class like "piece wq square-41" or "piece bp square-64"
+            const classArr = classes.split(' ').filter(c => c);
             
-            if (!type) return;
+            classArr.forEach(cls => {
+                if (cls === 'wp' || cls === 'wr' || cls === 'wn' || cls === 'wb' || cls === 'wq' || cls === 'wk') {
+                    color = 'w';
+                    type = cls.substring(1);
+                } else if (cls === 'bp' || cls === 'br' || cls === 'bn' || cls === 'bb' || cls === 'bq' || cls === 'bk') {
+                    color = 'b';
+                    type = cls.substring(1);
+                }
+            });
             
-            if (cls.includes('white')) type = type.toUpperCase();
-            board[square] = type;
+            // Get square position
+            const squareMatch = classes.match(/square-(\d+)/);
+            if (!squareMatch || !type || !color) return;
+            
+            const squareNum = parseInt(squareMatch[1]);
+            const fenSquare = squareToFEN(squareNum);
+            
+            if (fenSquare) {
+                const file = fenSquare.charCodeAt(0) - 97;  // a=0, h=7
+                const rank = parseInt(fenSquare[1]) - 1;  // 1=0, 8=7
+                
+                if (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
+                    board[rank][file] = color === 'w' ? type.toUpperCase() : type;
+                }
+            }
         });
         
-        if (Object.keys(board).length === 0) return null;
-        
-        const files = 'abcdefgh';
+        // Build FEN string
         let fen = '';
-        
-        for (let r = 8; r >= 1; r--) {
+        for (let r = 7; r >= 0; r--) {
             let empty = 0;
             for (let f = 0; f < 8; f++) {
-                const sq = files[f] + r;
-                if (board[sq]) {
-                    if (empty) { fen += empty; empty = 0; }
-                    fen += board[sq];
+                if (board[r][f]) {
+                    if (empty > 0) {
+                        fen += empty;
+                        empty = 0;
+                    }
+                    fen += board[r][f];
                 } else {
                     empty++;
                 }
             }
-            if (empty) fen += empty;
-            if (r > 1) fen += '/';
+            if (empty > 0) fen += empty;
+            if (r > 0) fen += '/';
         }
         
-        let side = 'w';
-        const turnIndicator = document.querySelector('.game-turn-indicator, [class*="turn-indicator"]');
-        if (turnIndicator?.className?.includes('white') === false) side = 'b';
-        if (turnIndicator?.className?.includes('black')) side = 'b';
+        // Detect side to move
+        // Check for turn indicator
+        let sideToMove = 'w';
+        const whiteClock = document.querySelector('.clock-white');
+        const blackClock = document.querySelector('.clock-black');
         
-        return fen + ' ' + side + ' KQkq - 0 1';
+        if (whiteClock?.classList.contains('selected')) {
+            sideToMove = 'w';
+        } else if (blackClock?.classList.contains('selected')) {
+            sideToMove = 'b';
+        } else {
+            // Try alternate method - check game info
+            const turnIndicator = document.querySelector('[class*="turn-indicator"]');
+            if (turnIndicator?.classList?.contains('black')) {
+                sideToMove = 'b';
+            } else if (turnIndicator?.classList?.contains('white')) {
+                sideToMove = 'w';
+            }
+        }
+        
+        console.log('Chess Killer: Found', pieces.length, 'pieces, side:', sideToMove);
+        
+        if (pieces.length < 2) return null;
+        
+        return fen + ' ' + sideToMove + ' KQkq - 0 1';
     }
     
     function analyzePosition() {
-        let fen = getBoardFEN();
+        const fen = getBoardFEN();
         
-        // Try alternative method
-        if (!fen || fen.startsWith('8/8')) {
-            fen = getBoardFEN_alt();
-        }
+        console.log('Chess Killer FEN:', fen);
         
-        console.log('Chess Killer: FEN =', fen);
-        
-        if (!fen) {
-            document.getElementById('ck-evaluation').textContent = 'Board not found! Refresh page';
+        if (!fen || fen.startsWith('8/8/8/8')) {
+            const evalEl = document.getElementById('ck-evaluation');
+            if (evalEl) evalEl.textContent = 'No board! pieces: ' + document.querySelectorAll('.piece').length;
             return;
         }
         
@@ -240,17 +175,17 @@
                     top: 50%;
                     right: 20px;
                     transform: translateY(-50%);
-                    width: 200px;
+                    width: 180px;
                     background: linear-gradient(145deg, #1a1a2e, #0f0f1a);
                     color: #fff;
-                    padding: 14px;
-                    border-radius: 10px;
+                    padding: 12px;
+                    border-radius: 8px;
                     font-family: 'Consolas', monospace;
                     z-index: 999999;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
                     border: 1px solid #ff6b6b;
                 }
-                #${PANEL_ID} h3 { margin: 0 0 10px 0; color: #ff6b6b; font-size: 14px; }
+                #${PANEL_ID} h3 { margin: 0 0 8px 0; color: #ff6b6b; font-size: 13px; }
                 #${PANEL_ID} .btn {
                     background: #4ecdc4;
                     color: #000;
@@ -260,17 +195,19 @@
                     cursor: pointer;
                     width: 100%;
                     font-weight: bold;
+                    font-size: 12px;
                 }
-                #${PANEL_ID} .eval { font-size: 11px; color: #888; margin: 8px 0; text-align: center; }
-                #${PANEL_ID} .best { font-size: 22px; color: #4ecdc4; text-align: center; margin: 8px 0; }
+                #${PANEL_ID} .eval { font-size: 10px; color: #888; margin: 8px 0; }
+                #${PANEL_ID} .best { font-size: 20px; color: #4ecdc4; text-align: center; margin: 8px 0; font-weight: bold; }
                 #${PANEL_ID} .close {
                     position: absolute;
-                    top: 5px;
+                    top: 4px;
                     right: 8px;
                     background: none;
                     border: none;
                     color: #666;
                     cursor: pointer;
+                    font-size: 14px;
                 }
             </style>
             <button class="close" id="ck-close">×</button>
@@ -285,24 +222,21 @@
         panel.querySelector('#ck-analyze').onclick = analyzePosition;
     }
     
-    // Monitor for board changes
     function init() {
         if (!window.location.hostname.includes('chess.com')) return;
         
-        let lastUrl = location.href;
-        new MutationObserver(() => {
-            if (location.href !== lastUrl) {
-                lastUrl = location.href;
-                document.getElementById(PANEL_ID)?.remove();
-            }
-            // Try create panel when board appears
-            const hasBoard = document.querySelector('[data-square], .board, .chess-board, .cg-board');
-            if (hasBoard && !document.getElementById(PANEL_ID)) {
+        // Try creating panel when board loads
+        const tryCreate = () => {
+            const hasPieces = document.querySelector('.piece[class*="square-"]');
+            if (hasPieces && !document.getElementById(PANEL_ID)) {
                 createPanel();
+                console.log('Chess Killer: Board detected');
             }
-        }).observe(document.body, { childList: true, subtree: true });
+        };
         
-        createPanel();
+        // Check periodically
+        setInterval(tryCreate, 1000);
+        tryCreate();
     }
     
     if (document.readyState === 'loading') {
