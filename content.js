@@ -1,13 +1,12 @@
-// Chess Killer - Show the best move to play
+// Chess Killer - Fixed: user's color detection + auto-update
 
 (function() {
     'use strict';
     
     const PANEL_ID = 'chess-killer-panel';
     let stockfish = null;
-    let lastBestMove = null;
+    let isUserWhite = true;
     
-    // Create Stockfish from blob
     async function loadStockfish() {
         if (stockfish) return stockfish;
         
@@ -16,61 +15,43 @@
             const scriptText = await response.text();
             const blob = new Blob([scriptText], { type: 'application/javascript' });
             stockfish = new Worker(URL.createObjectURL(blob));
-            
-            stockfish.onmessage = function(e) {
-                const msg = e.data;
-                
-                if (msg.includes('bestmove') && !msg.includes('pv')) {
-                    const parts = msg.split('bestmove ');
-                    if (parts[1]) {
-                        const move = parts[1].trim().split(' ')[0];
-                        if (move && move.length >= 4) {
-                            lastBestMove = move;
-                            displayBestMove(move);
-                        }
-                    }
-                }
-            };
-            
-            console.log('Chess Killer: Stockfish loaded successfully');
+            console.log('Chess Killer: Stockfish loaded');
             return stockfish;
         } catch (e) {
-            console.error('Stockfish load error:', e);
+            console.error('Stockfish error:', e);
             return null;
         }
     }
     
-    function displayBestMove(move) {
-        const bestEl = document.getElementById('ck-best-move');
-        if (!bestEl || !move) return;
+    // Detect user's color from the board orientation
+    function detectUserColor() {
+        // Check if white pieces are at bottom (user is white)
+        // or black pieces are at bottom (user is black)
+        const whitePieces = document.querySelectorAll('.piece.wp, .piece.wr, .piece.wn, .piece.wb, .piece.wq, .piece.wk');
+        const blackPieces = document.querySelectorAll('.piece.bp, .piece.br, .piece.bn, .piece.bb, .piece.bq, .piece.bk');
         
-        // Format: e2e4 -> e4
-        const from = move.substring(0, 2);
-        const to = move.substring(2, 4);
+        // Check which pieces are at the bottom ranks (1-2 for white, 7-8 for black - but in DOM as square-11, square-21 etc)
+        // Simpler: check if there are any white king on the left side (a1/b1 etc - rank 1)
+        const whiteKingSquare = document.querySelector('.piece.wk[class*="square-"]');
+        const blackKingSquare = document.querySelector('.piece.bk[class*="square-"]');
         
-        // Try to get piece type
-        const pieceTypes = {
-            'p': '', 'n': 'N', 'b': 'B', 'r': 'R', 'q': 'Q', 'k': 'K'
-        };
-        
-        let notation = to;
-        
-        // Check for castling
-        if (move === 'e1g1' || move === 'e1c1' || move === 'e8g8' || move === 'e8c8') {
-            if (move.includes('g')) notation = 'O-O';
-            else notation = 'O-O-O';
-        } else {
-            // For pawn moves, just show destination (e2e4 -> e4)
-            // For pieces, show piece + destination (g1f3 -> Nf3)
-            // This is simplified - proper SAN would need more logic
+        if (whiteKingSquare) {
+            const match = whiteKingSquare.className.match(/square-(\d+)/);
+            if (match) {
+                const rank = Math.floor(parseInt(match[1]) / 10);
+                isUserWhite = (rank === 1 || rank === 2);
+            }
         }
         
-        bestEl.textContent = notation;
+        // Alternative: check clock
+        const whiteClock = document.querySelector('.clock-white');
+        const selectedClock = document.querySelector('.clock-white.selected, .clock-black.selected');
         
-        // Add arrow/indicator effect
-        bestEl.style.animation = 'none';
-        bestEl.offsetHeight; // Trigger reflow
-        bestEl.style.animation = 'pulse 0.5s ease-in-out';
+        if (selectedClock) {
+            isUserWhite = selectedClock.classList.contains('clock-white');
+        }
+        
+        return isUserWhite;
     }
     
     function squareToFEN(squareNum) {
@@ -81,8 +62,9 @@
     }
     
     function getBoardFEN() {
+        // First check if there's a board position
         const pieces = document.querySelectorAll('.piece[class*="square-"]');
-        if (pieces.length === 0) return null;
+        if (pieces.length < 4) return null; // At least 2 pieces each side
         
         const board = Array(8).fill(null).map(() => Array(8).fill(null));
         
@@ -136,74 +118,97 @@
             if (r > 0) fen += '/';
         }
         
+        // Detect whose turn
         let sideToMove = 'w';
-        if (document.querySelector('.clock-black')?.classList.contains('selected')) {
-            sideToMove = 'b';
+        const turnIndicator = document.querySelector('.game-turn-indicator, .clock-white.selected, .clock-black.selected');
+        if (turnIndicator) {
+            if (turnIndicator.classList.contains('clock-black') || turnIndicator.classList.contains('black')) {
+                sideToMove = 'b';
+            }
         }
         
-        return fen + ' ' + sideToMove + ' KQkq - 0 1';
+        return { fen: fen + ' ' + sideToMove + ' KQkq - 0 1', side: sideToMove };
     }
     
     async function analyzePosition() {
-        const fen = getBoardFEN();
+        const boardData = getBoardFEN();
         const evalEl = document.getElementById('ck-evaluation');
         const bestEl = document.getElementById('ck-best-move');
+        const sideEl = document.getElementById('ck-side');
         
-        if (!fen || fen.startsWith('8/8/8/8')) {
+        if (!boardData || !boardData.fen || boardData.fen.startsWith('8/8/8/8')) {
             evalEl.textContent = 'Board not found!';
-            bestEl.textContent = '--';
             return;
         }
         
-        lastBestMove = null;
+        const { fen, side } = boardData;
+        
+        // Update user side display
+        sideEl.textContent = `Your color: ${isUserWhite ? 'WHITE' : 'BLACK'}`;
+        
+        evalEl.textContent = 'Analyzing...';
         bestEl.textContent = '...';
-        evalEl.textContent = 'Thinking...';
         
         const sf = await loadStockfish();
-        
         if (!sf) {
             evalEl.textContent = 'Engine error!';
             return;
         }
         
-        // Send position
-        sf.postMessage('position fen ' + fen);
+        // Store response for eval parsing
+        let bestMove = null;
         
-        // Get best move with moderate depth for speed
-        sf.postMessage('go depth 12');
-        
-        // Wait for result
-        let waitCount = 0;
-        const checkInterval = setInterval(() => {
-            waitCount++;
+        sf.onmessage = function(e) {
+            const msg = e.data;
             
-            // Check evaluation
-            if (sf.lastResponse?.includes('score')) {
-                const evalMatch = sf.lastResponse.match(/score (cp|mate) ([-\d]+)/);
+            if (msg.includes('bestmove')) {
+                const move = msg.split('bestmove ')[1]?.split(' ')[0];
+                if (move) {
+                    bestMove = move;
+                    displayMove(move, side);
+                    evalEl.textContent = 'Done!';
+                }
+            }
+            
+            if (msg.includes('info depth')) {
+                const evalMatch = msg.match(/score (cp|mate) ([-\d]+)/);
                 if (evalMatch) {
                     const score = parseInt(evalMatch[2]);
-                    evalEl.textContent = evalMatch[1] === 'mate' 
+                    let displayScore = evalMatch[1] === 'mate' 
                         ? `MATE: ${Math.abs(score)}` 
-                        : (score > 0 ? '+' : '') + (score / 100).toFixed(1);
+                        : (score / 100).toFixed(1);
+                    
+                    // Adjust for user perspective
+                    if (!isUserWhite && score !== 0) {
+                        displayScore = score > 0 ? '+' + (-score/100).toFixed(1) : '' + (-score/100).toFixed(1);
+                    }
+                    
+                    evalEl.textContent = 'Score: ' + displayScore;
                 }
             }
-            
-            if (lastBestMove || waitCount > 30) {
-                clearInterval(checkInterval);
-                if (!lastBestMove) {
-                    evalEl.textContent = 'Timeout';
-                    bestEl.textContent = '--';
-                }
-            }
-        }, 100);
-        
-        // Store last message for evaluation
-        const originalOnMessage = sf.onmessage;
-        sf.lastResponse = '';
-        sf.onmessage = function(e) {
-            sf.lastResponse = e.data;
-            originalOnMessage(e);
         };
+        
+        sf.postMessage('position fen ' + fen);
+        sf.postMessage('go depth 15');
+    }
+    
+    function displayMove(move, currentSide) {
+        const bestEl = document.getElementById('ck-best-move');
+        if (!move) return;
+        
+        // Extract destination square
+        const to = move.substring(2, 4);
+        
+        let displayMove = to;
+        
+        // For castling
+        if (move === 'e1g1' || move === 'e8g8') displayMove = 'O-O';
+        else if (move === 'e1c1' || move === 'e8c8') displayMove = 'O-O-O';
+        
+        // Check if this is a capture or check (simplified)
+        // Could add + for check
+        
+        bestEl.textContent = displayMove;
     }
     
     function createPanel() {
@@ -213,97 +218,131 @@
         panel.id = PANEL_ID;
         panel.innerHTML = `
             <style>
-                @keyframes pulse {
-                    0%, 100% { transform: scale(1); }
-                    50% { transform: scale(1.1); }
-                }
                 #${PANEL_ID} {
                     position: fixed;
                     top: 50%;
                     right: 20px;
                     transform: translateY(-50%);
-                    width: 180px;
+                    width: 200px;
                     background: linear-gradient(145deg, #1a1a2e, #0f0f1a);
                     color: #fff;
-                    padding: 14px;
-                    border-radius: 10px;
+                    padding: 16px;
+                    border-radius: 12px;
                     font-family: 'JetBrains Mono', 'Consolas', monospace;
                     z-index: 999999;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+                    box-shadow: 0 4px 24px rgba(0,0,0,0.6);
                     border: 1px solid #ff6b6b;
                 }
                 #${PANEL_ID} h3 { 
-                    margin: 0 0 10px 0; 
+                    margin: 0 0 8px 0; 
                     color: #ff6b6b; 
-                    font-size: 14px;
+                    font-size: 16px;
+                    text-align: center;
+                }
+                #${PANEL_ID} .side {
+                    font-size: 10px;
+                    color: #666;
+                    text-align: center;
+                    margin-bottom: 8px;
+                    background: rgba(255,107,107,0.2);
+                    padding: 4px;
+                    border-radius: 4px;
                 }
                 #${PANEL_ID} .btn {
                     background: linear-gradient(135deg, #4ecdc4, #44a08d);
                     color: #1a1a2e;
                     border: none;
-                    padding: 12px;
-                    border-radius: 6px;
+                    padding: 14px;
+                    border-radius: 8px;
                     cursor: pointer;
                     width: 100%;
                     font-weight: bold;
-                    font-size: 14px;
+                    font-size: 15px;
+                    margin: 8px 0;
+                }
+                #${PANEL_ID} .btn:active {
+                    transform: scale(0.98);
                 }
                 #${PANEL_ID} .eval { 
                     font-size: 12px; 
                     color: #aaa; 
                     margin: 10px 0;
                     text-align: center;
+                    background: rgba(0,0,0,0.3);
+                    padding: 8px;
+                    border-radius: 6px;
                 }
                 #${PANEL_ID} .best { 
-                    font-size: 48px; 
+                    font-size: 56px; 
                     color: #4ecdc4; 
                     text-align: center; 
                     margin: 15px 0; 
                     font-weight: bold;
-                    text-shadow: 0 0 20px rgba(78,205,196,0.5);
+                    text-shadow: 0 0 30px rgba(78,205,196,0.6);
                 }
                 #${PANEL_ID} .close {
                     position: absolute;
-                    top: 6px;
-                    right: 10px;
+                    top: 8px;
+                    right: 12px;
                     background: none;
                     border: none;
                     color: #555;
                     cursor: pointer;
-                    font-size: 16px;
+                    font-size: 18px;
                 }
                 #${PANEL_ID} .hint {
-                    font-size: 8px;
-                    color: #666;
+                    font-size: 9px;
+                    color: #555;
                     text-align: center;
                     margin-top: 8px;
                 }
             </style>
             <button class="close" id="ck-close">×</button>
             <h3>♟ Chess Killer</h3>
-            <button class="btn" id="ck-analyze">Show Best Move</button>
+            <button class="btn" id="ck-analyze">Get Best Move</button>
+            <div class="side" id="ck-side">Detecting color...</div>
             <div class="eval" id="ck-evaluation">Click button</div>
             <div class="best" id="ck-best-move">--</div>
-            <div class="hint">The move you need to play</div>
+            <div class="hint">For your color only!</div>
         `;
         
         document.body.appendChild(panel);
         
         panel.querySelector('#ck-close').onclick = () => panel.remove();
-        panel.querySelector('#ck-analyze').onclick = analyzePosition;
+        
+        panel.querySelector('#ck-analyze').onclick = () => {
+            isUserWhite = detectUserColor();
+            analyzePosition();
+        };
+        
+        // Auto-detect color on load
+        setTimeout(() => {
+            isUserWhite = detectUserColor();
+            document.getElementById('ck-side').textContent = isUserWhite ? '♔ You are WHITE' : '♚ You are BLACK';
+        }, 2000);
     }
     
     function init() {
         if (!window.location.hostname.includes('chess.com')) return;
         
-        setInterval(() => {
+        // Check for board and refresh
+        const checkBoard = () => {
             const hasPieces = document.querySelector('.piece[class*="square-"]');
             if (hasPieces && !document.getElementById(PANEL_ID)) {
                 createPanel();
             }
-        }, 1000);
+            // Update status periodically
+            if (document.getElementById(PANEL_ID)) {
+                const sideEl = document.getElementById('ck-side');
+                if (sideEl && sideEl.textContent.includes('Detecting')) {
+                    isUserWhite = detectUserColor();
+                    sideEl.textContent = isUserWhite ? '♔ You are WHITE' : '♚ You are BLACK';
+                }
+            }
+        };
         
-        createPanel();
+        setInterval(checkBoard, 1500);
+        checkBoard();
     }
     
     if (document.readyState === 'loading') {
