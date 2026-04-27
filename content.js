@@ -1,69 +1,76 @@
-// Chess Killer - Show best move with Stockfish Blob Worker
+// Chess Killer - Show the best move to play
 
 (function() {
     'use strict';
     
     const PANEL_ID = 'chess-killer-panel';
     let stockfish = null;
-    let currentFen = null;
-    let pendingAnalysis = false;
+    let lastBestMove = null;
     
-    // Load Stockfish from CDN as text and create blob worker
-    async function loadStockfishBlob() {
+    // Create Stockfish from blob
+    async function loadStockfish() {
         if (stockfish) return stockfish;
         
         try {
-            // Fetch the stockfish script
             const response = await fetch('https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.0/stockfish.js');
             const scriptText = await response.text();
-            
-            // Create a blob URL for the worker
             const blob = new Blob([scriptText], { type: 'application/javascript' });
-            const blobUrl = URL.createObjectURL(blob);
-            
-            stockfish = new Worker(blobUrl);
+            stockfish = new Worker(URL.createObjectURL(blob));
             
             stockfish.onmessage = function(e) {
                 const msg = e.data;
                 
-                if (msg.includes('bestmove')) {
-                    const move = msg.split('bestmove ')[1]?.split(' ')[0];
-                    const bestEl = document.getElementById('ck-best-move');
-                    if (bestEl && move) {
-                        // Format move to show nicer (e2e4 -> e4)
-                        bestEl.textContent = formatMove(move);
-                    }
-                    pendingAnalysis = false;
-                }
-                
-                if (msg.includes('info depth')) {
-                    const evalMatch = msg.match(/score (cp|mate) ([-\d]+)/);
-                    if (evalMatch) {
-                        const score = parseInt(evalMatch[2]);
-                        const evalStr = evalMatch[1] === 'mate' 
-                            ? `MATE: ${score > 0 ? '+' : ''}${Math.abs(score)}` 
-                            : (score / 100).toFixed(1);
-                        document.getElementById('ck-evaluation').textContent = evalStr;
+                if (msg.includes('bestmove') && !msg.includes('pv')) {
+                    const parts = msg.split('bestmove ');
+                    if (parts[1]) {
+                        const move = parts[1].trim().split(' ')[0];
+                        if (move && move.length >= 4) {
+                            lastBestMove = move;
+                            displayBestMove(move);
+                        }
                     }
                 }
             };
             
-            stockfish.onerror = function(e) {
-                console.error('Stockfish error:', e);
-                pendingAnalysis = false;
-            };
-            
+            console.log('Chess Killer: Stockfish loaded successfully');
             return stockfish;
         } catch (e) {
-            console.error('Failed to load Stockfish:', e);
+            console.error('Stockfish load error:', e);
             return null;
         }
     }
     
-    function formatMove(move) {
-        // Convert UCI to SAN-ish (e2e4 -> e4)
-        if (!move || move.length < 4) return move;
-        return move.substring(2, 4);
+    function displayBestMove(move) {
+        const bestEl = document.getElementById('ck-best-move');
+        if (!bestEl || !move) return;
+        
+        // Format: e2e4 -> e4
+        const from = move.substring(0, 2);
+        const to = move.substring(2, 4);
+        
+        // Try to get piece type
+        const pieceTypes = {
+            'p': '', 'n': 'N', 'b': 'B', 'r': 'R', 'q': 'Q', 'k': 'K'
+        };
+        
+        let notation = to;
+        
+        // Check for castling
+        if (move === 'e1g1' || move === 'e1c1' || move === 'e8g8' || move === 'e8c8') {
+            if (move.includes('g')) notation = 'O-O';
+            else notation = 'O-O-O';
+        } else {
+            // For pawn moves, just show destination (e2e4 -> e4)
+            // For pieces, show piece + destination (g1f3 -> Nf3)
+            // This is simplified - proper SAN would need more logic
+        }
+        
+        bestEl.textContent = notation;
+        
+        // Add arrow/indicator effect
+        bestEl.style.animation = 'none';
+        bestEl.offsetHeight; // Trigger reflow
+        bestEl.style.animation = 'pulse 0.5s ease-in-out';
     }
     
     function squareToFEN(squareNum) {
@@ -85,6 +92,7 @@
             
             let type = '';
             let color = '';
+            
             const classArr = classes.split(' ').filter(c => c);
             
             classArr.forEach(cls => {
@@ -147,34 +155,55 @@
             return;
         }
         
-        currentFen = fen;
-        evalEl.textContent = 'Loading engine...';
+        lastBestMove = null;
         bestEl.textContent = '...';
+        evalEl.textContent = 'Thinking...';
         
-        const sf = await loadStockfishBlob();
+        const sf = await loadStockfish();
         
         if (!sf) {
-            evalEl.textContent = 'Engine failed!';
-            bestEl.textContent = '--';
+            evalEl.textContent = 'Engine error!';
             return;
         }
         
-        // Clear previous results
-        bestEl.textContent = '...';
-        
-        // Send position to Stockfish
+        // Send position
         sf.postMessage('position fen ' + fen);
-        sf.postMessage('go depth 15');
         
-        pendingAnalysis = true;
+        // Get best move with moderate depth for speed
+        sf.postMessage('go depth 12');
         
-        // Auto-clear after 5 seconds
-        setTimeout(() => {
-            if (pendingAnalysis) {
-                evalEl.textContent = 'Timeout';
-                pendingAnalysis = false;
+        // Wait for result
+        let waitCount = 0;
+        const checkInterval = setInterval(() => {
+            waitCount++;
+            
+            // Check evaluation
+            if (sf.lastResponse?.includes('score')) {
+                const evalMatch = sf.lastResponse.match(/score (cp|mate) ([-\d]+)/);
+                if (evalMatch) {
+                    const score = parseInt(evalMatch[2]);
+                    evalEl.textContent = evalMatch[1] === 'mate' 
+                        ? `MATE: ${Math.abs(score)}` 
+                        : (score > 0 ? '+' : '') + (score / 100).toFixed(1);
+                }
             }
-        }, 5000);
+            
+            if (lastBestMove || waitCount > 30) {
+                clearInterval(checkInterval);
+                if (!lastBestMove) {
+                    evalEl.textContent = 'Timeout';
+                    bestEl.textContent = '--';
+                }
+            }
+        }, 100);
+        
+        // Store last message for evaluation
+        const originalOnMessage = sf.onmessage;
+        sf.lastResponse = '';
+        sf.onmessage = function(e) {
+            sf.lastResponse = e.data;
+            originalOnMessage(e);
+        };
     }
     
     function createPanel() {
@@ -184,6 +213,10 @@
         panel.id = PANEL_ID;
         panel.innerHTML = `
             <style>
+                @keyframes pulse {
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.1); }
+                }
                 #${PANEL_ID} {
                     position: fixed;
                     top: 50%;
@@ -203,44 +236,31 @@
                     margin: 0 0 10px 0; 
                     color: #ff6b6b; 
                     font-size: 14px;
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
                 }
                 #${PANEL_ID} .btn {
                     background: linear-gradient(135deg, #4ecdc4, #44a08d);
                     color: #1a1a2e;
                     border: none;
-                    padding: 10px;
+                    padding: 12px;
                     border-radius: 6px;
                     cursor: pointer;
                     width: 100%;
                     font-weight: bold;
-                    font-size: 13px;
-                    transition: transform 0.1s;
-                }
-                #${PANEL_ID} .btn:active {
-                    transform: scale(0.98);
+                    font-size: 14px;
                 }
                 #${PANEL_ID} .eval { 
-                    font-size: 11px; 
-                    color: #888; 
+                    font-size: 12px; 
+                    color: #aaa; 
                     margin: 10px 0;
                     text-align: center;
-                    background: rgba(0,0,0,0.3);
-                    padding: 6px;
-                    border-radius: 4px;
                 }
                 #${PANEL_ID} .best { 
-                    font-size: 32px; 
+                    font-size: 48px; 
                     color: #4ecdc4; 
                     text-align: center; 
-                    margin: 10px 0; 
+                    margin: 15px 0; 
                     font-weight: bold;
-                    background: rgba(78,205,196,0.15);
-                    padding: 15px;
-                    border-radius: 8px;
-                    letter-spacing: 3px;
+                    text-shadow: 0 0 20px rgba(78,205,196,0.5);
                 }
                 #${PANEL_ID} .close {
                     position: absolute;
@@ -252,27 +272,19 @@
                     cursor: pointer;
                     font-size: 16px;
                 }
-                #${PANEL_ID} .label {
-                    font-size: 9px;
+                #${PANEL_ID} .hint {
+                    font-size: 8px;
                     color: #666;
                     text-align: center;
-                }
-                #${PANEL_ID} .warning {
-                    font-size: 8px;
-                    color: #ff6b6b;
-                    text-align: center;
                     margin-top: 8px;
-                    opacity: 0.6;
                 }
             </style>
             <button class="close" id="ck-close">×</button>
             <h3>♟ Chess Killer</h3>
-            <div class="label">EVALUATION</div>
-            <div class="eval" id="ck-evaluation">Click Analyze</div>
-            <div class="label">BEST MOVE</div>
+            <button class="btn" id="ck-analyze">Show Best Move</button>
+            <div class="eval" id="ck-evaluation">Click button</div>
             <div class="best" id="ck-best-move">--</div>
-            <button class="btn" id="ck-analyze">Find Best Move</button>
-            <div class="warning">Analysis only!</div>
+            <div class="hint">The move you need to play</div>
         `;
         
         document.body.appendChild(panel);
@@ -284,12 +296,10 @@
     function init() {
         if (!window.location.hostname.includes('chess.com')) return;
         
-        // Check for board periodically
         setInterval(() => {
             const hasPieces = document.querySelector('.piece[class*="square-"]');
             if (hasPieces && !document.getElementById(PANEL_ID)) {
                 createPanel();
-                console.log('Chess Killer: Panel created');
             }
         }, 1000);
         
