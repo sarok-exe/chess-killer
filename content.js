@@ -1,34 +1,71 @@
-// Chess Killer - Load Stockfish inline without worker
+// Chess Killer - Show best move with Stockfish Blob Worker
 
 (function() {
     'use strict';
     
     const PANEL_ID = 'chess-killer-panel';
-    let sfProcess = null;
+    let stockfish = null;
+    let currentFen = null;
+    let pendingAnalysis = false;
     
-    // Piece values for basic evaluation
-    const pieceValues = {
-        'p': 100, 'n': 320, 'b': 330, 'r': 500, 'q': 900, 'k': 20000,
-        'P': -100, 'N': -320, 'B': -330, 'R': -500, 'Q': -900, 'K': -20000
-    };
-    
-    // Simple position evaluation (material + position)
-    function evaluatePosition(fen) {
-        const position = fen.split(' ')[0];
-        let score = 0;
+    // Load Stockfish from CDN as text and create blob worker
+    async function loadStockfishBlob() {
+        if (stockfish) return stockfish;
         
-        position.split('/').forEach(row => {
-            row.split('').forEach(char => {
-                if (pieceValues[char]) {
-                    score += pieceValues[char];
+        try {
+            // Fetch the stockfish script
+            const response = await fetch('https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.0/stockfish.js');
+            const scriptText = await response.text();
+            
+            // Create a blob URL for the worker
+            const blob = new Blob([scriptText], { type: 'application/javascript' });
+            const blobUrl = URL.createObjectURL(blob);
+            
+            stockfish = new Worker(blobUrl);
+            
+            stockfish.onmessage = function(e) {
+                const msg = e.data;
+                
+                if (msg.includes('bestmove')) {
+                    const move = msg.split('bestmove ')[1]?.split(' ')[0];
+                    const bestEl = document.getElementById('ck-best-move');
+                    if (bestEl && move) {
+                        // Format move to show nicer (e2e4 -> e4)
+                        bestEl.textContent = formatMove(move);
+                    }
+                    pendingAnalysis = false;
                 }
-            });
-        });
-        
-        return score / 100;
+                
+                if (msg.includes('info depth')) {
+                    const evalMatch = msg.match(/score (cp|mate) ([-\d]+)/);
+                    if (evalMatch) {
+                        const score = parseInt(evalMatch[2]);
+                        const evalStr = evalMatch[1] === 'mate' 
+                            ? `MATE: ${score > 0 ? '+' : ''}${Math.abs(score)}` 
+                            : (score / 100).toFixed(1);
+                        document.getElementById('ck-evaluation').textContent = evalStr;
+                    }
+                }
+            };
+            
+            stockfish.onerror = function(e) {
+                console.error('Stockfish error:', e);
+                pendingAnalysis = false;
+            };
+            
+            return stockfish;
+        } catch (e) {
+            console.error('Failed to load Stockfish:', e);
+            return null;
+        }
     }
     
-    // Convert square-XX to FEN coordinate
+    function formatMove(move) {
+        // Convert UCI to SAN-ish (e2e4 -> e4)
+        if (!move || move.length < 4) return move;
+        return move.substring(2, 4);
+    }
+    
     function squareToFEN(squareNum) {
         const file = (squareNum % 10) - 1;
         const rank = Math.floor(squareNum / 10);
@@ -48,7 +85,6 @@
             
             let type = '';
             let color = '';
-            
             const classArr = classes.split(' ').filter(c => c);
             
             classArr.forEach(cls => {
@@ -100,52 +136,45 @@
         return fen + ' ' + sideToMove + ' KQkq - 0 1';
     }
     
-    // Use chess.js for move generation (simulated for now)
-    function getBestMove(fen) {
-        // Very basic: find moves that capture pieces
-        const parts = fen.split(' ');
-        const position = parts[0];
-        
-        // For now, return a simple evaluation
-        const score = evaluatePosition(fen);
-        
-        if (Math.abs(score) > 10) {
-            return score > 0 ? 'White wins' : 'Black wins';
-        }
-        
-        // Simple opening moves suggestions
-        const side = parts[1];
-        if (position === 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR') {
-            return side === 'w' ? 'e4' : 'e5';
-        }
-        
-        return score > 0 ? '+' + score.toFixed(1) : score.toFixed(1);
-    }
-    
-    function analyzePosition() {
+    async function analyzePosition() {
         const fen = getBoardFEN();
         const evalEl = document.getElementById('ck-evaluation');
         const bestEl = document.getElementById('ck-best-move');
         
-        if (!fen || fen.startsWith('8/8/8/8') || fen.includes('rn')) {
-            evalEl.textContent = 'No board!';
+        if (!fen || fen.startsWith('8/8/8/8')) {
+            evalEl.textContent = 'Board not found!';
+            bestEl.textContent = '--';
             return;
         }
         
-        evalEl.textContent = 'Analyzing...';
+        currentFen = fen;
+        evalEl.textContent = 'Loading engine...';
+        bestEl.textContent = '...';
         
-        try {
-            // Use basic evaluation since Stockfish Web Workers are blocked in extensions
-            setTimeout(() => {
-                const score = evaluatePosition(fen);
-                const move = getBestMove(fen);
-                
-                evalEl.textContent = 'Score: ' + (score > 0 ? '+' : '') + score.toFixed(2);
-                bestEl.textContent = move;
-            }, 500);
-        } catch (e) {
-            evalEl.textContent = 'Error: ' + e.message;
+        const sf = await loadStockfishBlob();
+        
+        if (!sf) {
+            evalEl.textContent = 'Engine failed!';
+            bestEl.textContent = '--';
+            return;
         }
+        
+        // Clear previous results
+        bestEl.textContent = '...';
+        
+        // Send position to Stockfish
+        sf.postMessage('position fen ' + fen);
+        sf.postMessage('go depth 15');
+        
+        pendingAnalysis = true;
+        
+        // Auto-clear after 5 seconds
+        setTimeout(() => {
+            if (pendingAnalysis) {
+                evalEl.textContent = 'Timeout';
+                pendingAnalysis = false;
+            }
+        }, 5000);
     }
     
     function createPanel() {
@@ -163,46 +192,91 @@
                     width: 180px;
                     background: linear-gradient(145deg, #1a1a2e, #0f0f1a);
                     color: #fff;
-                    padding: 12px;
-                    border-radius: 8px;
-                    font-family: 'Consolas', monospace;
+                    padding: 14px;
+                    border-radius: 10px;
+                    font-family: 'JetBrains Mono', 'Consolas', monospace;
                     z-index: 999999;
-                    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
                     border: 1px solid #ff6b6b;
                 }
-                #${PANEL_ID} h3 { margin: 0 0 8px 0; color: #ff6b6b; font-size: 13px; }
+                #${PANEL_ID} h3 { 
+                    margin: 0 0 10px 0; 
+                    color: #ff6b6b; 
+                    font-size: 14px;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
                 #${PANEL_ID} .btn {
-                    background: #4ecdc4;
-                    color: #000;
+                    background: linear-gradient(135deg, #4ecdc4, #44a08d);
+                    color: #1a1a2e;
                     border: none;
-                    padding: 8px;
-                    border-radius: 4px;
+                    padding: 10px;
+                    border-radius: 6px;
                     cursor: pointer;
                     width: 100%;
                     font-weight: bold;
-                    font-size: 12px;
+                    font-size: 13px;
+                    transition: transform 0.1s;
                 }
-                #${PANEL_ID} .eval { font-size: 10px; color: #888; margin: 8px 0; }
-                #${PANEL_ID} .best { font-size: 20px; color: #4ecdc4; text-align: center; margin: 8px 0; font-weight: bold; }
+                #${PANEL_ID} .btn:active {
+                    transform: scale(0.98);
+                }
+                #${PANEL_ID} .eval { 
+                    font-size: 11px; 
+                    color: #888; 
+                    margin: 10px 0;
+                    text-align: center;
+                    background: rgba(0,0,0,0.3);
+                    padding: 6px;
+                    border-radius: 4px;
+                }
+                #${PANEL_ID} .best { 
+                    font-size: 32px; 
+                    color: #4ecdc4; 
+                    text-align: center; 
+                    margin: 10px 0; 
+                    font-weight: bold;
+                    background: rgba(78,205,196,0.15);
+                    padding: 15px;
+                    border-radius: 8px;
+                    letter-spacing: 3px;
+                }
                 #${PANEL_ID} .close {
                     position: absolute;
-                    top: 4px;
-                    right: 8px;
+                    top: 6px;
+                    right: 10px;
                     background: none;
                     border: none;
-                    color: #666;
+                    color: #555;
                     cursor: pointer;
-                    font-size: 14px;
+                    font-size: 16px;
+                }
+                #${PANEL_ID} .label {
+                    font-size: 9px;
+                    color: #666;
+                    text-align: center;
+                }
+                #${PANEL_ID} .warning {
+                    font-size: 8px;
+                    color: #ff6b6b;
+                    text-align: center;
+                    margin-top: 8px;
+                    opacity: 0.6;
                 }
             </style>
             <button class="close" id="ck-close">×</button>
             <h3>♟ Chess Killer</h3>
+            <div class="label">EVALUATION</div>
             <div class="eval" id="ck-evaluation">Click Analyze</div>
+            <div class="label">BEST MOVE</div>
             <div class="best" id="ck-best-move">--</div>
-            <button class="btn" id="ck-analyze">Analyze</button>
+            <button class="btn" id="ck-analyze">Find Best Move</button>
+            <div class="warning">Analysis only!</div>
         `;
         
         document.body.appendChild(panel);
+        
         panel.querySelector('#ck-close').onclick = () => panel.remove();
         panel.querySelector('#ck-analyze').onclick = analyzePosition;
     }
@@ -210,10 +284,12 @@
     function init() {
         if (!window.location.hostname.includes('chess.com')) return;
         
+        // Check for board periodically
         setInterval(() => {
             const hasPieces = document.querySelector('.piece[class*="square-"]');
             if (hasPieces && !document.getElementById(PANEL_ID)) {
                 createPanel();
+                console.log('Chess Killer: Panel created');
             }
         }, 1000);
         
