@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Chess Killer",
+  "version": "1.0.0",
+  "description": "Chess assistant with Stockfish for Chess.com",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://*.chess.com/*"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [{
+    "matches": ["https://*.chess.com/*"],
+    "js": ["content.js"]
+  }]
+}

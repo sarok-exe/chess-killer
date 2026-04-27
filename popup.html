@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            width: 300px;
+            background: #1a1a2e;
+            color: #fff;
+            font-family: 'Segoe UI', sans-serif;
+            padding: 20px;
+        }
+        h1 { color: #ff6b6b; font-size: 24px; margin-bottom: 15px; }
+        .btn {
+            background: #4ecdc4;
+            color: #1a1a2e;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            width: 100%;
+            margin-top: 10px;
+        }
+        .btn:hover { background: #45b7aa; }
+        .info { font-size: 12px; color: #888; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <h1>♟ Chess Killer</h1>
+    <p>Analyze positions with Stockfish</p>
+    <button class="btn" id="analyze">Analyze Position</button>
+    <button class="btn" id="show" style="background:#ff6b6b;color:#fff;">Show Panel</button>
+    <div class="info">Use on Chess.com for analysis only</div>
+    <script src="popup.js"></script>
+</body>
+</html>
