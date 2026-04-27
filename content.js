@@ -1,4 +1,4 @@
-// Chess Killer - Fixed for Chess.com board structure
+// Chess Killer - Updated Stockfish loading
 
 (function() {
     'use strict';
@@ -10,21 +10,36 @@
         if (stockfish) return stockfish;
         
         try {
-            stockfish = new Worker('https://cdn.jsdelivr.net/npm/stockfish.js@10.0.0/dist/stockfish.js');
+            // Try different Stockfish sources
+            stockfish = new Worker(
+                'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.0/stockfish.js'
+            );
         } catch (e) {
             console.error('Stockfish error:', e);
-            return null;
+            // Try fallback
+            try {
+                stockfish = new Worker(
+                    'https://cdn.jsdelivr.net/npm/stockfish.wasm@1.0.0/stockfish.js'
+                );
+            } catch (e2) {
+                console.error('Stockfish fallback error:', e2);
+                return null;
+            }
         }
         
+        let ready = false;
+        
         stockfish.onmessage = function(e) {
-            const msg = e.data;
-            if (msg.includes('bestmove')) {
-                const move = msg.split('bestmove ')[1]?.split(' ')[0];
+            if (e.data === 'ready' || e.data.includes('uciok')) {
+                ready = true;
+            }
+            if (e.data.includes('bestmove')) {
+                const move = e.data.split('bestmove ')[1]?.split(' ')[0];
                 const bestEl = document.getElementById('ck-best-move');
                 if (bestEl) bestEl.textContent = move || 'None';
             }
-            if (msg.includes('info depth')) {
-                const evalMatch = msg.match(/score (cp|mate) ([-\d]+)/);
+            if (e.data.includes('info depth')) {
+                const evalMatch = e.data.match(/score (cp|mate) ([-\d]+)/);
                 if (evalMatch) {
                     const score = parseInt(evalMatch[2]);
                     const evalStr = evalMatch[1] === 'mate' 
@@ -35,13 +50,18 @@
             }
         };
         
+        stockfish.onerror = function(e) {
+            console.error('Stockfish worker error:', e);
+        };
+        
         return stockfish;
     }
     
-    // Convert square-XX to FEN (21 = a1, 81 = h1)
+    // Convert square-XX to FEN
     function squareToFEN(squareNum) {
-        const file = (squareNum % 10) - 1;  // 1->0, 2->1, ..., 8->7
-        const rank = Math.floor(squareNum / 10);  // 1->0, 8->8
+        const file = (squareNum % 10) - 1;
+        const rank = Math.floor(squareNum / 10);
+        if (file < 0 || file > 7 || rank < 1 || rank > 8) return null;
         const files = 'abcdefgh';
         return files[file] + rank;
     }
@@ -49,22 +69,17 @@
     function getBoardFEN() {
         const pieces = document.querySelectorAll('.piece[class*="square-"]');
         
-        if (pieces.length === 0) {
-            return null;
-        }
+        if (pieces.length === 0) return null;
         
-        // Build FEN board array
         const board = Array(8).fill(null).map(() => Array(8).fill(null));
         
         pieces.forEach(piece => {
             const classes = piece.className;
             if (!classes) return;
             
-            // Extract piece type and color
             let type = '';
             let color = '';
             
-            // Parse class like "piece wq square-41" or "piece bp square-64"
             const classArr = classes.split(' ').filter(c => c);
             
             classArr.forEach(cls => {
@@ -77,7 +92,6 @@
                 }
             });
             
-            // Get square position
             const squareMatch = classes.match(/square-(\d+)/);
             if (!squareMatch || !type || !color) return;
             
@@ -85,8 +99,8 @@
             const fenSquare = squareToFEN(squareNum);
             
             if (fenSquare) {
-                const file = fenSquare.charCodeAt(0) - 97;  // a=0, h=7
-                const rank = parseInt(fenSquare[1]) - 1;  // 1=0, 8=7
+                const file = fenSquare.charCodeAt(0) - 97;
+                const rank = parseInt(fenSquare[1]) - 1;
                 
                 if (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
                     board[rank][file] = color === 'w' ? type.toUpperCase() : type;
@@ -94,16 +108,12 @@
             }
         });
         
-        // Build FEN string
         let fen = '';
         for (let r = 7; r >= 0; r--) {
             let empty = 0;
             for (let f = 0; f < 8; f++) {
                 if (board[r][f]) {
-                    if (empty > 0) {
-                        fen += empty;
-                        empty = 0;
-                    }
+                    if (empty > 0) { fen += empty; empty = 0; }
                     fen += board[r][f];
                 } else {
                     empty++;
@@ -113,29 +123,10 @@
             if (r > 0) fen += '/';
         }
         
-        // Detect side to move
-        // Check for turn indicator
         let sideToMove = 'w';
         const whiteClock = document.querySelector('.clock-white');
-        const blackClock = document.querySelector('.clock-black');
-        
-        if (whiteClock?.classList.contains('selected')) {
-            sideToMove = 'w';
-        } else if (blackClock?.classList.contains('selected')) {
-            sideToMove = 'b';
-        } else {
-            // Try alternate method - check game info
-            const turnIndicator = document.querySelector('[class*="turn-indicator"]');
-            if (turnIndicator?.classList?.contains('black')) {
-                sideToMove = 'b';
-            } else if (turnIndicator?.classList?.contains('white')) {
-                sideToMove = 'w';
-            }
-        }
-        
-        console.log('Chess Killer: Found', pieces.length, 'pieces, side:', sideToMove);
-        
-        if (pieces.length < 2) return null;
+        if (whiteClock?.classList.contains('selected')) sideToMove = 'w';
+        else if (document.querySelector('.clock-black')?.classList.contains('selected')) sideToMove = 'b';
         
         return fen + ' ' + sideToMove + ' KQkq - 0 1';
     }
@@ -143,15 +134,14 @@
     function analyzePosition() {
         const fen = getBoardFEN();
         
-        console.log('Chess Killer FEN:', fen);
-        
         if (!fen || fen.startsWith('8/8/8/8')) {
-            const evalEl = document.getElementById('ck-evaluation');
-            if (evalEl) evalEl.textContent = 'No board! pieces: ' + document.querySelectorAll('.piece').length;
+            document.getElementById('ck-evaluation').textContent = 'No board!';
             return;
         }
         
         const sf = initStockfish();
+        
+        // Wait for Stockfish to be ready
         if (!sf) {
             document.getElementById('ck-evaluation').textContent = 'Stockfish error!';
             return;
@@ -159,8 +149,10 @@
         
         document.getElementById('ck-evaluation').textContent = 'Analyzing...';
         
+        // Initialize UCI
+        sf.postMessage('uci');
         sf.postMessage('position fen ' + fen);
-        sf.postMessage('go depth 12');
+        sf.postMessage('go depth 15');
     }
     
     function createPanel() {
@@ -225,18 +217,14 @@
     function init() {
         if (!window.location.hostname.includes('chess.com')) return;
         
-        // Try creating panel when board loads
-        const tryCreate = () => {
+        setInterval(() => {
             const hasPieces = document.querySelector('.piece[class*="square-"]');
             if (hasPieces && !document.getElementById(PANEL_ID)) {
                 createPanel();
-                console.log('Chess Killer: Board detected');
             }
-        };
+        }, 1000);
         
-        // Check periodically
-        setInterval(tryCreate, 1000);
-        tryCreate();
+        createPanel();
     }
     
     if (document.readyState === 'loading') {
