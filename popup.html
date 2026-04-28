@@ -1,36 +1,94 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8">
     <style>
         body {
             width: 300px;
-            background: #1a1a2e;
-            color: #fff;
-            font-family: 'Segoe UI', sans-serif;
             padding: 20px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            color: #eee;
+            margin: 0;
         }
-        h1 { color: #ff6b6b; font-size: 24px; margin-bottom: 15px; }
-        .btn {
-            background: #4ecdc4;
-            color: #1a1a2e;
-            border: none;
-            padding: 12px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: bold;
+        h2 {
+            margin: 0 0 15px 0;
+            color: #e94560;
+            text-align: center;
+            font-size: 20px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #888;
+        }
+        input[type="text"] {
             width: 100%;
+            padding: 10px;
+            border: 2px solid #0f3460;
+            border-radius: 8px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background: #c73650;
+        }
+        .info {
+            font-size: 11px;
+            color: #666;
+            text-align: center;
             margin-top: 10px;
         }
-        .btn:hover { background: #45b7aa; }
-        .info { font-size: 12px; color: #888; margin-top: 15px; }
+        .status {
+            background: #0f3460;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 12px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
-    <h1>♟ Chess Killer</h1>
-    <p>Analyze positions with Stockfish</p>
-    <button class="btn" id="analyze">Analyze Position</button>
-    <button class="btn" id="show" style="background:#ff6b6b;color:#fff;">Show Panel</button>
-    <div class="info">Use on Chess.com for analysis only</div>
+    <h2>♛ Chess Killer</h2>
+
+    <div class="status" id="status">Ready</div>
+
+    <div class="input-group">
+        <label>Enter move (algebraic: e4, Nf3, O-O):</label>
+        <input type="text" id="moveInput" placeholder="e4" />
+    </div>
+
+    <button id="sendMove">Send Move</button>
+    <button id="getBest" style="background: #0f3460;">Get Best Move</button>
+
+    <div class="info">
+        Works on chess.com<br>
+        Supports: e4, Nf3, Bxc6, O-O, Qh4+
+    </div>
+
     <script src="popup.js"></script>
 </body>
 </html>

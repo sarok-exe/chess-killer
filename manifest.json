@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Chess Killer",
-  "version": "1.0.0",
-  "description": "Chess assistant with Stockfish for Chess.com",
+  "version": "2.0.0",
+  "description": "Chess analyzer with Stockfish for Chess.com - supports algebraic notation",
   "permissions": ["activeTab", "scripting"],
   "host_permissions": ["https://*.chess.com/*"],
   "action": {
@@ -10,6 +10,11 @@
   },
   "content_scripts": [{
     "matches": ["https://*.chess.com/*"],
-    "js": ["content.js"]
+    "js": ["content.js"],
+    "run_at": "document_end"
+  }],
+  "web_accessible_resources": [{
+    "resources": ["stockfish.js", "stockfish.wasm"],
+    "matches": ["https://*.chess.com/*"]
   }]
 }
